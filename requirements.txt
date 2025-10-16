@@ -1,0 +1,6 @@
+mdtraj
+openmm
+numpy
+crossflow
+shutil
+requests

@@ -1,0 +1,47 @@
+SLimming down to the basics.
+A. List of key command line tools (pyproject.toml):
+    sp_search
+    alpha_check
+    alpha_fix
+    prepare_protein
+    het_param
+    param
+    rest_min (maybe)
+
+B. Dependencies of the above (cli_scripts.py):
+    sp_search: sp_search
+    alpha_check: alpha_check
+    alpha_fix: alpha_fix
+    prepare_protein: complete
+    het_param: parameterize
+    param: param
+    rest_min: rest_min
+
+C. Dependencies of the above (cba_tools.py), ignoring crossflow, mdtraj, _pdbify, _trajify, etc.:
+    sp_search: none
+    alpha_check: unique_chain_ids, alpha_get, uniprot_diff
+    alpha_fix: unique_chain_ids, alpha_get, uniprot_diff, match_align, aln_score, rest_min, bumps, hetify
+    complete: hetify, pdbdiff
+    parameterize: none
+    param: parameterize
+    rest_min: rest_min_omm, (rest_min_sander), bumps
+
+D. List of required functions:
+    sp_search
+    alpha_check
+    alpha_fix
+    unique_chain_ids
+    alpha_get
+    uniprot_diff
+    match_align
+    aln_score
+    rest_min (+omm/sander)
+    bumps
+    hetify
+    complete
+    parameterize
+    param
+    pdbdiff
+
+
+
