@@ -41,7 +41,7 @@ Restrained minimization performed using OpenMM
 2. The corresponding Alphafold database structures are downloaded.
 3. The alphafold structures are least-squares fitted to the input structure on the basis of a sequence alignment, and conserved and missing atoms identified.
 4. Restrained energy minimisation of the alphafold structures drives conserved atoms towards their input file counterparts.
-5. Conserved atoms in the optimised alphafold structure are have their coordinates replaced with those of their input file counderparts.
+5. Conserved atoms in the optimised alphafold structure have their coordinates replaced with those of their input file counderparts.
 6. A second round of restrained optimisation is performed.
 
 ## Requirements
