@@ -1,7 +1,6 @@
 from argparse import ArgumentParser
-import mdtraj as mdt
 from alphafix._version import __version__
-from alphafix.tools import alpha_check, alpha_get
+from alphafix.tools import alpha_check, alpha_fix
 
 
 def alpha_check_cli():
@@ -18,7 +17,11 @@ def alpha_check_cli():
     if not args.inpdb:
         parser.print_help()
         return
-    log = alpha_check(args.inpdb, args.uniprot_ids)
+    try:
+        log = alpha_check(args.inpdb, args.uniprot_ids)
+    except Exception as e:
+        print(f"{e}")
+        return
     if args.log:
         with open(args.log, 'w') as log_file:
             log_file.write(log)
@@ -37,7 +40,7 @@ def alpha_fix_cli():
                         help="List of chain IDs to include in the output.")
     parser.add_argument("-u", "--uniprot_ids", nargs='*', required=False,
                         help="List of UniProt IDs for the input structure.")
-    parser.add_argument("-l", "--log", help="Log file for Alphafold output.")
+    parser.add_argument("-l", "--log", help="Log file.")
     parser.add_argument("-n", "--no_trim", action="store_true",
                         help="Don't trim the fixed PDB file"
                         " to match the input.")
@@ -47,9 +50,12 @@ def alpha_fix_cli():
     if not args.inpdb or not args.outpdb:
         parser.print_help()
         return
-    out_pdb, log = alpha_fix(args.inpdb, args.uniprot_ids,
-                             chains=args.chains, trim=not args.no_trim)
-    out_pdb.save(args.outpdb)
+    try:
+        out_pdb, log = alpha_fix(args.inpdb, args.uniprot_ids,
+                                 chains=args.chains, trim=not args.no_trim)
+    except Exception as e:
+        print(f"{e}")
+        return
     if args.log:
         with open(args.log, 'w') as log_file:
             log_file.write(log)

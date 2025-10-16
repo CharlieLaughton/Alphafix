@@ -5,13 +5,13 @@
 #   AmberTools
 #
 # b) Python packages that will be automatically installed:
-#   MDTraj
-#   OpenMM
+#   mdtraj
+#   openmm
 #   requests
 #   crossflow
 #.  numpy
 #
-# The functions are:
+# The top-level functions are:
 #
 #   alpha_check:   Using uniprot ids (either provided or determined),
 #                  obtain the corresponding Alphafold structures
@@ -35,7 +35,7 @@
 import mdtraj as mdt
 import numpy as np
 
-from crossflow.tasks import SubprocessTask, CalledProcessError
+from crossflow.tasks import SubprocessTask
 from crossflow.filehandling import FileHandler, FileHandle
 from functools import cache
 from enum import IntEnum
@@ -45,12 +45,13 @@ import requests
 from pathlib import Path
 import sys
 
+Structure = (mdt.Trajectory, str, Path, FileHandle)
 
 #  Part 1: Various utilities
 
 def _aliased(cmd):
     '''
-    Little utility to see if a comand is aliased
+    Little utility to see if a command is aliased
     '''
     alias = SubprocessTask('alias {cmd}')
     alias.set_inputs(['cmd'])
@@ -104,7 +105,7 @@ def _trajify(prot_in, standard_names=False):
     '''
     Convert something appropriate to MDTraj trajectory format
     '''
-    if not isinstance(prot_in, (str, Path, mdt.Trajectory, FileHandle)):
+    if not isinstance(prot_in, Structure):
         raise TypeError(f'Unsupported input type {type(prot_in)})')
 
     if isinstance(prot_in, (str, Path)):
@@ -117,6 +118,27 @@ def _trajify(prot_in, standard_names=False):
     return prot_in
 
 
+def _residue_id(r):
+    '''
+    Generate a unique identifier string for a residue
+    based on its name, sequence number, and chain ID.
+
+    e.g. ALA12.A
+    '''
+    return f"{r.name}{r.resSeq}.{r.chain.chain_id}"
+
+
+def _atom_id(a):
+    '''
+    Generate a unique identifier string for an atom
+    based on its residue and atom name.
+
+    e.g. ALA12.A@CA
+    '''
+
+    return f"{_residue_id(a.residue)}@{a.name}"
+
+
 def unique_chain_ids(t):
     '''
     Return a copy of the trajectory with chain ids set.
@@ -125,6 +147,12 @@ def unique_chain_ids(t):
     chains, but no chain ids set.
 
     Chains with existing names (not ' '), are preserved.
+
+    Args:
+        t (Structure): trajectory or PDB file.
+
+    Returns:
+        mdt.Trajectory: A copy of the input trajectory with unique chain ids.
     '''
     t = _trajify(t)
     t = mdt.Trajectory(t.xyz.copy(), t.topology.copy())
@@ -152,8 +180,8 @@ def bumps(prot_in, cutoff=0.2):
     Report close contacts in a protein structure
 
     Args:
-        prot_in: The input protein structure (PDB file or MDTraj trajectory)
-        cutoff: Distance cutoff for defining close contacts (default: 0.2 nm)
+        prot_in (Structure): protein structure
+        cutoff (float): Distance cutoff for defining close contacts (default: 0.2 nm)
 
     Returns:
         str: A report of close contacts in the protein structure
@@ -181,11 +209,14 @@ def hetify(pdbin):
     '''
     Change ATOM to HETATM for non-protein atoms
 
-    Note: this function doesn't understand nucleic acids.
-
+    Args:
+        pdbin (Structure): The input PDB file
+    
+    Returns:
+        FileHandle: A PDB file with HETATM records for non-protein atoms.
     '''
     t = _trajify(pdbin)
-    non_protein = t.topology.select('not protein')
+    non_protein = t.topology.select('not protein and not nucleic')
     het_residues = set([t.topology.atom(i).residue.name for i in non_protein])
     for r in ('HID', 'HIE', 'HIP', 'CYX', 'ASH', 'GLH', 'CYM'):
         if r in het_residues:
@@ -202,27 +233,6 @@ def hetify(pdbin):
     out_pdb = fh.create('tmp.pdb')
     out_pdb.write_text(out_data)
     return out_pdb
-
-
-def residue_id(r):
-    '''
-    Generate a unique identifier string for a residue
-    based on its name, sequence number, and chain ID.
-
-    e.g. ALA12.A
-    '''
-    return f"{r.name}{r.resSeq}.{r.chain.chain_id}"
-
-
-def atom_id(a):
-    '''
-    Generate a unique identifier string for an atom
-    based on its residue and atom name.
-
-    e.g. ALA12.A@CA
-    '''
-
-    return f"{residue_id(a.residue)}@{a.name}"
 
 
 # For the Smith-Waterman code:
@@ -251,7 +261,7 @@ def smith_waterman(seq1, seq2):
        seq2 (str): The second sequence
 
     Returns:
-        tuple: The aligned sequences
+        (str, str): The aligned sequences
     '''
     # Generating the empty matrices for storing scores and tracing
     row = len(seq1) + 1
@@ -361,10 +371,10 @@ def aln_score(alignment):
         in a pairwise alignment.
 
     Args:
-        alignment (tuple): A tuple containing two aligned sequences.
+        alignment (tuple): The two aligned sequences.
 
     Returns:
-        tuple: A tuple containing the number of matches, mismatches, and gaps.
+        (int, int, int): the numbers of matches, mismatches, and gaps.
 
     '''
     if not len(alignment[0]) == len(alignment[1]):
@@ -383,8 +393,7 @@ def aln_score(alignment):
     return matches, mismatches, gaps
 
 #  Part 2: Sequence-based manipulation of "pure" protein structures
-#          represented as single-snapshot MDTrajectory files
-
+#          
 
 def match_align(pdb_in, pdb_ref, cutoff=0.02, renumber=False, align=True):
     '''
@@ -394,16 +403,14 @@ def match_align(pdb_in, pdb_ref, cutoff=0.02, renumber=False, align=True):
     until all pairs are within <cutoff> nanometers.
 
     Args:
-        pdb_in: The input PDB file or MDTraj trajectory for the structure
-                to align.
-        pdb_ref: The reference PDB file or MDTraj trajectory for the structure
-                to align to.
-        cutoff: The distance cutoff for defining close contacts
-                (default: 0.02 nm).
-        renumber: If True, the returned PDB file has its residue sequence
-                  numbers changed to match those in the reference PDB.
-        align: If False, no structure superposition is performed (only useful
-               if renumber=True!).
+        pdb_in (Structure):   The structure to align.
+        pdb_ref (Structure):  The reference structure to align to.
+        cutoff (float, optional): The distance cutoff for defining close contacts
+                  (default: 0.02 nm).
+        renumber (bool, optional): If True, the returned PDB file has its residue
+                  sequence numbers changed to match those in the reference PDB.
+        align (bool, optional): If False, no structure superposition is performed
+                  (only useful if renumber=True!).
 
    Returns:
         Filehandle: The path to the aligned PDB file.
@@ -487,6 +494,7 @@ def match_align(pdb_in, pdb_ref, cutoff=0.02, renumber=False, align=True):
     return _pdbify(t_out), alignment
 
 
+@cache
 def sp_search(seq):
     '''
     Search swissprot for a sequepnce using a local installation of blastp
@@ -495,8 +503,8 @@ def sp_search(seq):
         seq (str): The query sequence to search for.
 
     Returns:
-        list: A list of dictionaries with Uniprot codes of matching sequences
-            in SwissProtand their % sequence identities.
+        [dict, ...]: dictionaries with Uniprot codes of matching sequences
+              in SwissProt and their % sequence identities.
 
     '''
     _check_available('blastp')
@@ -525,11 +533,11 @@ def uni_find(pdb_in):
     Find the best matching SwissProt sequences for each chain in a PDB file.
 
     Args:
-        pdb_in (path-like): The input PDB file.
+        pdb_in (str, Path, or FileHandle): A PDB file.
 
     Returns:
-        list: A list of Uniprot codes, one per protein chain in the
-        input PDB file.
+        [str, ...]: Uniprot codes, one per protein chain in the
+                    PDB file.
 
     '''
     results = []
@@ -570,6 +578,7 @@ def uni_find(pdb_in):
     return results
 
 
+@cache
 def alpha_get(uniprot_id, session=None):
     '''
     Get the Alphafold structure with the given Uniprot Id
@@ -581,10 +590,9 @@ def alpha_get(uniprot_id, session=None):
                                               the API call.
 
     Returns:
-        FileHandle: A file handle for the downloaded PDB file.
+        FileHandle: The downloaded PDB file.
     '''
     if not session:
-        #  session = retry(requests.Session(), retries=5, backoff_factor=0.2)
         session = requests.Session()
     base_url = f'https://alphafold.com/api/prediction/{uniprot_id}'
     response = session.get(base_url)
@@ -605,10 +613,11 @@ def uniprot_diff(prot_pdb, uniprot_id, chain=None, trim=True):
     Compare a protein structure with a Uniprot entry.
 
     Args:
-        prot_pdb (str): path to the PDB file of the protein structure
+        prot_pdb (Structure):  protein to compare
         uniprot_id (str): Uniprot ID to compare with
-        chain (str): chain ID to compare with, if None, all chains are compared
-        trim (bool): whether to note missing residues at N- and C-terminii
+        chain (str, optional): chain ID to compare with, if None, all chains are
+                          compared
+        trim (bool, optional): whether to note missing residues at N- and C-terminii
 
     Returns:
         str: report of differences
@@ -688,10 +697,10 @@ def uniprot_diff(prot_pdb, uniprot_id, chain=None, trim=True):
 
 def alpha_check(pdb_in, unicodes=None):
     '''
-    Check the compatibility of a protein PDB file with Uniprot entries.
+    Check the compatibility of a protein structure with Uniprot entries.
 
     Args:
-        pdb_in (str): Path to the input PDB file.
+        pdb_in (Structure): Protein structure to check.
         unicodes (None or list): List of Uniprot IDs to check against
                          (one for each protein chain)
                   if None, the Uniprot IDs are determined automatically.
@@ -727,7 +736,7 @@ def alpha_fix(pdb_in, unicodes=None, chains=None, trim=False):
     Complete workflow to remediate a protein PDB file
 
     Args:
-        pdb_in (str): Path to the input PDB file.
+        pdb_in (Structure): Protein structure to fix.
         unicodes (list or None): List of Uniprot IDs to use
                          (one for each protein chain)
                          if None, the Uniprot IDs are determined
@@ -816,8 +825,8 @@ def alpha_fix(pdb_in, unicodes=None, chains=None, trim=False):
     #   with their exact original values where possible:
     t_alpha = mdt.load_pdb(opt_alpha_1)
     t_orig = mdt.load_pdb(prot_renumbered)
-    id_orig = [atom_id(a) for a in t_orig.topology.atoms]
-    id_alpha = [atom_id(a) for a in t_alpha.topology.atoms]
+    id_orig = [_atom_id(a) for a in t_orig.topology.atoms]
+    id_alpha = [_atom_id(a) for a in t_alpha.topology.atoms]
     for i, a in enumerate(id_orig):
         if a in id_alpha:
             j = id_alpha.index(a)
@@ -839,28 +848,24 @@ def alpha_fix(pdb_in, unicodes=None, chains=None, trim=False):
 
 
 def leap(amberpdb, ff, het_names=None, solvate=None, padding=10.0, het_dir='.',
-         n_na=0, n_cl=0, script_only=False):
+         n_na=0, n_cl=0):
     '''
     Parameterize a molecular system using tleap.
 
     Args:
        amberpdb (str): An Amber-compliant PDB file
        ff (list): The force fields to use.
-       het_names (list): List of parameterised heterogens
-       solvate (str or None): type of periodic box ('box', 'cube', or 'oct')
-       padding (float): Clearance between solute and any box edge (Angstroms)
-       het_dir (str or Path): location of the directory containing heterogen
+       het_names (list, optional): List of parameterised heterogens
+       solvate (str, optional): type of periodic box ('box', 'cube', or 'oct')
+       padding (float, optional): Clearance between solute and any box edge (Angstroms)
+       het_dir (str or Path, optional): location of the directory containing heterogen
                               parameters
-       n_na (int): number of Na+ ions to add (0 = minimal salt)
-       n_cl (int): number of Cl- ions to add (0 = minimal salt)
-       script_only (bool): if True, only generate the tleap script
-                            and do not run tleap
+       n_na (int, optional): number of Na+ ions to add (0 = minimal salt)
+       n_cl (int, optional): number of Cl- ions to add (0 = minimal salt)
 
     Returns:
          (FileHandle, FileHandle, str): prmtop file, inpcrd file,
                                         tleap log text
-        or:
-            str: the tleap script (if script_only=True)
 
     '''
     _check_available('tleap')
@@ -890,10 +895,7 @@ def leap(amberpdb, ff, het_names=None, solvate=None, padding=10.0, het_dir='.',
                 script += f'{r} = loadmol2 {r}.mol2\n'
                 inputs += [f'{r}.mol2', f'{r}.frcmod']
 
-    if script_only:
-        script += f"system = loadpdb {amberpdb}\n"
-    else:
-        script += "system = loadpdb system.pdb\n"
+    script += "system = loadpdb system.pdb\n"
     if solvate == "oct":
         script += f"solvateoct system {water_box} {padding}\n"
     elif solvate == "cube":
@@ -904,8 +906,6 @@ def leap(amberpdb, ff, het_names=None, solvate=None, padding=10.0, het_dir='.',
         script += f"addions system Na+ {n_na}\naddions system Cl- {n_cl}\n"
 
     script += "saveamberparm system system.prmtop system.inpcrd\nquit"
-    if script_only:
-        return script
 
     tleap = SubprocessTask('tleap -f script')
     tleap.set_inputs(inputs)
@@ -952,8 +952,8 @@ def rest_min(pdbin, pdbref=None, kr=1.0, maxcyc=200):
     Args:
         pdbin (str or FileHandle): input trajectory
         pdbref (str or FileHandle, optional): reference coordinates
-        kr (float): force constant for the restraint (default: 1.0)
-        maxcyc (int): maximum number of cycles (default: 200)
+        kr (float, optional): force constant for the restraint (default: 1.0)
+        maxcyc (int, optional): maximum number of cycles (default: 200)
 
     Returns:
         (FileHandle, str): minimized structure (PDB format), and log
@@ -985,8 +985,8 @@ def rest_min_omm(pdbin, pdbref=None, kr=1.0, maxcyc=200):
     Args:
         pdbin (str or FileHandle): input trajectory
         pdbref (str or FileHandle, optional): reference coordinates
-        kr (float): force constant for the restraint (default: 1.0)
-        maxcyc (int): maximum number of cycles (default: 200)
+        kr (float, optional): force constant for the restraint (default: 1.0)
+        maxcyc (int, optional): maximum number of cycles (default: 200)
 
     Returns:
         (FileHandle, str): minimized structure in PDB format, and log
@@ -1029,9 +1029,9 @@ def rest_min_omm(pdbin, pdbref=None, kr=1.0, maxcyc=200):
         ta_ri.resSeq = tin_ri.resSeq
         ta_ri.chain.chain_id = tin_ri.chain.chain_id
 
-    in_ids = [atom_id(a) for a in tin.topology.atoms]
-    a_ids = [atom_id(a) for a in ta.topology.atoms]
-    ref_ids = [atom_id(a) for a in tref.topology.atoms]
+    in_ids = [_atom_id(a) for a in tin.topology.atoms]
+    a_ids = [_atom_id(a) for a in ta.topology.atoms]
+    ref_ids = [_atom_id(a) for a in tref.topology.atoms]
     extras = False
     for i in ref_ids:
         if i not in a_ids:
