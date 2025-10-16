@@ -36,6 +36,8 @@ dependencies = [
     "matplotlib",
     "mdtraj",
     "rdkit",
+    "openmm",
+    "requests",
     "crossflow"
 ]
 [project.scripts]
