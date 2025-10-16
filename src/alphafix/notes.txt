@@ -1,0 +1,26 @@
+SLimming down to the basics.
+A. List of key command line tools (pyproject.toml):
+    alpha_check
+    alpha_fix
+
+B. Dependencies of the above (cli_scripts.py):
+    alpha_check: alpha_check
+    alpha_fix: alpha_fix
+
+C. Dependencies of the above (cba_tools.py), ignoring crossflow, mdtraj, _pdbify, _trajify, etc.:
+    alpha_check: unique_chain_ids, alpha_get, uniprot_diff
+    alpha_fix: unique_chain_ids, alpha_get, uniprot_diff, match_align, aln_score, rest_min, bumps, hetify
+
+D. List of required functions:
+    alpha_check
+    alpha_fix
+    unique_chain_ids
+    alpha_get
+    uniprot_diff
+    match_align
+    aln_score
+    rest_min (+omm/sander)
+    bumps
+    hetify
+
+
