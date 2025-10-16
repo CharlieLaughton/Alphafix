@@ -46,10 +46,11 @@ Restrained minimization performed using OpenMM
 
 ## Requirements
 
-Alphafix requires that Ambertools and blastp (with the Swissprot database files) are installed. The easiest way to do this is via conda:
+Alphafix requires that Ambertools and blastp (with the Swissprot database files) are installed. The easiest way to do this is via conda. Note it is neccessary to roll the version of numpy back to 2.2 to avoid problems with ambertools::
 
 ```bash
 % conda install conda-forge::ambertools bioconda::blast -y
+% conda install numpy==2.2
 % export BLASTDB="/path/to/blast/database/folder"
 % update_blastdb.pl --decompress swissprot
 ```
@@ -59,7 +60,7 @@ Alphafix requires that Ambertools and blastp (with the Swissprot database files)
 Alphafix can be installed via pip:
 
 ```bash
-pip install git+https://github.com/CompBioAsia/CBAtools.git
+pip install git+https://github.com/CharlieLaughton/Alphafix.git
 ```
 Insalling Alphafix makes two command-line tools available:
 
@@ -103,6 +104,7 @@ options:
   --version             show program's version number and exit
 
 %
+```
 
 ## Author
 
