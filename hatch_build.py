@@ -6,7 +6,7 @@ from hatchling.metadata.plugin.interface import MetadataHookInterface
 class CustomMetadataHook(MetadataHookInterface):
     def update(self, metadata):
         VSRE = r"^__version__ = ['\"]([^'\"]*)['\"]"
-        VERSIONFILE = "src/cba_tools/_version.py"
+        VERSIONFILE = "src/alphafix/_version.py"
         verstrline = open(VERSIONFILE, "rt").read()
         mo = re.search(VSRE, verstrline, re.M)
         if mo:
