@@ -40,7 +40,7 @@ Restrained minimization performed using OpenMM
 1. UniProt entries matching each chain in the protein are identified.
 2. The corresponding Alphafold database structures are downloaded.
 3. The alphafold structures are least-squares fitted to the input structure on the basis of a sequence alignment, and conserved and missing atoms identified.
-4. Restrained energy minimisation of the alphafold structures drives consserved atoms towards their input file counterparts.
+4. Restrained energy minimisation of the alphafold structures drives conserved atoms towards their input file counterparts.
 5. Conserved atoms in the optimised alphafold structure are have their coordinates replaced with those of their input file counderparts.
 6. A second round of restrained optimisation is performed.
 
@@ -87,8 +87,8 @@ options:
   -l, --log LOG         Log file for Alphafold output.
   -n, --no_trim         Don't trim the fixed PDB file to match the input.
   --version             show program's version number and exit
-∞
-∞ 
+
+
 
 % alpha_check -h
 usage: alpha_check [-h] -i INPDB [-u [UNIPROT_IDS ...]] [-l LOG] [--version]
