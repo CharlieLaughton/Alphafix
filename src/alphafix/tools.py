@@ -9,7 +9,7 @@
 #   openmm
 #   requests
 #   crossflow
-#.  numpy
+#   numpy
 #
 # The top-level functions are:
 #
@@ -48,6 +48,7 @@ import sys
 Structure = (mdt.Trajectory, str, Path, FileHandle)
 
 #  Part 1: Various utilities
+
 
 def _aliased(cmd):
     '''
@@ -181,7 +182,8 @@ def bumps(prot_in, cutoff=0.2):
 
     Args:
         prot_in (Structure): protein structure
-        cutoff (float): Distance cutoff for defining close contacts (default: 0.2 nm)
+        cutoff (float): Distance cutoff for defining close
+                        contacts (default: 0.2 nm)
 
     Returns:
         str: A report of close contacts in the protein structure
@@ -393,7 +395,8 @@ def aln_score(alignment):
     return matches, mismatches, gaps
 
 #  Part 2: Sequence-based manipulation of "pure" protein structures
-#          
+#
+
 
 def match_align(pdb_in, pdb_ref, cutoff=0.02, renumber=False, align=True):
     '''
@@ -405,8 +408,8 @@ def match_align(pdb_in, pdb_ref, cutoff=0.02, renumber=False, align=True):
     Args:
         pdb_in (Structure):   The structure to align.
         pdb_ref (Structure):  The reference structure to align to.
-        cutoff (float, optional): The distance cutoff for defining close contacts
-                  (default: 0.02 nm).
+        cutoff (float, optional): The distance cutoff for defining close
+                  contacts (default: 0.02 nm).
         renumber (bool, optional): If True, the returned PDB file has its residue
                   sequence numbers changed to match those in the reference PDB.
         align (bool, optional): If False, no structure superposition is performed
@@ -834,6 +837,7 @@ def alpha_fix(pdb_in, unicodes=None, chains=None, trim=False):
 
     # Second round of restrained energy minimization:
     opt_alpha_2, log2 = rest_min(_pdbify(t_alpha))
+
     if bumps(opt_alpha_2) != '':
         log2 += 'WARNING: Close contacts remain in minimized structure\n'
     t_out = _trajify(opt_alpha_2)
@@ -857,9 +861,10 @@ def leap(amberpdb, ff, het_names=None, solvate=None, padding=10.0, het_dir='.',
        ff (list): The force fields to use.
        het_names (list, optional): List of parameterised heterogens
        solvate (str, optional): type of periodic box ('box', 'cube', or 'oct')
-       padding (float, optional): Clearance between solute and any box edge (Angstroms)
-       het_dir (str or Path, optional): location of the directory containing heterogen
-                              parameters
+       padding (float, optional): Clearance between solute and any box edge
+                                  (Angstroms)
+       het_dir (str or Path, optional): location of the directory containing
+                              heterogen parameters
        n_na (int, optional): number of Na+ ions to add (0 = minimal salt)
        n_cl (int, optional): number of Cl- ions to add (0 = minimal salt)
 
@@ -943,6 +948,42 @@ def ambpdb(inpcrd, prmtop):
     return outpdb
 
 
+def renumbered_pdb(pdbin, renumbering):
+    '''
+    Renumber a PDB file according to a renumbering map.
+
+    Args:
+        pdbin (str or FileHandle): input PDB file
+        renumbering (str or FileHandle): renumbering map from pdb4amber
+
+    Returns:
+        FileHandle: renumbered PDB file
+    '''
+    fh = FileHandler()
+    pdbout = fh.create('renumbered.pdb')
+    renum_map = {}
+    for line in renumbering.read_text().strip().split('\n'):
+        fields = line.split()
+        old_resid = int(fields[-1])
+        new_resid = int(fields[-3])
+        renum_map[old_resid] = new_resid
+
+    out_lines = []
+    for line in pdbin.read_text().strip().split('\n'):
+        if line.startswith('ATOM') or line.startswith('HETATM'):
+            old_resid = int(line[22:26].strip())
+            if old_resid in renum_map:
+                new_resid = renum_map[old_resid]
+                newline = line[:22] + f'{new_resid:>4}' + line[26:]
+                out_lines.append(newline)
+            else:
+                out_lines.append(line)
+        else:
+            out_lines.append(line)
+    pdbout.write_text('\n'.join(out_lines) + '\n')
+    return pdbout
+
+
 def rest_min(pdbin, pdbref=None, kr=1.0, maxcyc=200):
     '''
     Perform restrained minimization on a structure.
@@ -962,8 +1003,10 @@ def rest_min(pdbin, pdbref=None, kr=1.0, maxcyc=200):
         'pdb4amber -i in.pdb  -o out.pdb'
         )
     pdb4amber.set_inputs(['in.pdb'])
-    pdb4amber.set_outputs(['out.pdb'])
-    pdb_tmp = pdb4amber(pdbin)
+    pdb4amber.set_outputs(['out.pdb', 'out_renum.txt'])
+    pdb_tmp, renumbering = pdb4amber(pdbin)
+    pdb_tmp = renumbered_pdb(pdb_tmp, renumbering)
+
     try:
         pdb_out, log = rest_min_omm(pdb_tmp, pdbref=pdbref, kr=kr,
                                     maxcyc=maxcyc)
@@ -1036,10 +1079,10 @@ def rest_min_omm(pdbin, pdbref=None, kr=1.0, maxcyc=200):
     for i in ref_ids:
         if i not in a_ids:
             extras = True
+
     if extras:
         print('Warning: reference structure contains atoms'
               ' not in input structure', file=sys.stderr)
-    ref_inds = [a_ids.index(a) for a in ref_ids if a in a_ids]
 
     OPRMTOP = AmberPrmtopFile(prmtop)
     OINPCRD = AmberInpcrdFile(inpcrd)
@@ -1058,8 +1101,11 @@ def rest_min_omm(pdbin, pdbref=None, kr=1.0, maxcyc=200):
     force.addPerParticleParameter("x0")
     force.addPerParticleParameter("y0")
     force.addPerParticleParameter("z0")
-    for i, j in enumerate(ref_inds):
-        force.addParticle(j, tref.xyz[0, i] * nanometer)
+    # for i, j in enumerate(ref_inds):
+    for i, a_id in enumerate(a_ids):
+        if a_id in ref_ids:
+            j = ref_ids.index(a_id)
+            force.addParticle(i, tref.xyz[0, j] * nanometer)
 
     system.addForce(force)
 
@@ -1088,4 +1134,3 @@ def rest_min_omm(pdbin, pdbref=None, kr=1.0, maxcyc=200):
     log += f'  number of restrained atoms: {len(ref_ids)}\n'
 
     return _pdbify(tout), log
-

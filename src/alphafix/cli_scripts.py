@@ -56,10 +56,9 @@ def alpha_fix_cli():
     except Exception as e:
         print(f"{e}")
         return
+    out_pdb.save(args.outpdb)
     if args.log:
         with open(args.log, 'w') as log_file:
             log_file.write(log)
     else:
         print(log)
-
-
