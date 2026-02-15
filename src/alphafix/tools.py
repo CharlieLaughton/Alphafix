@@ -460,7 +460,9 @@ def match_align(pdb_in, pdb_ref, cutoff=0.02, renumber=False, align=True):
     if renumber:
         for pair in pair_pos:
             seq = tt_ref.atom(pair[1]).residue.resSeq
+            chain_id = tt_ref.atom(pair[1]).residue.chain.chain_id
             tt_copy.atom(pair[0]).residue.resSeq = seq
+            tt_copy.atom(pair[0]).residue.chain.chain_id = chain_id
 
     if not align:
         return _pdbify(t_copy), alignment
@@ -811,6 +813,7 @@ def alpha_fix(pdb_in, unicodes=None, chains=None, trim=False):
             t_alpha = t_tmp.atom_slice(sel)
         else:
             t_alpha = t_alpha.stack(t_tmp.atom_slice(sel), keep_resSeq=True)
+            t_alpha.topology.chain(i).chain_id = chain.chain_id
 
     t_alpha_top = t_alpha.topology
     # Renumber the original protein to match the alphafold residue numbers:
@@ -1047,6 +1050,14 @@ def rest_min_omm(pdbin, pdbref=None, kr=1.0, maxcyc=200):
         pdbref, _ = match_align(pdbref, pdbin)
     tin = _trajify(pdbin, standard_names=False)
     tref = _trajify(pdbref, standard_names=False)
+    
+    # Turn any CYX to CYS, so restraints not impeded:
+    for r in tin.topology.residues:
+        if 'CYX' in r.name:
+            r.name = 'CYS'
+    for r in tref.topology.residues:
+        if 'CYX' in r.name:
+            r.name = 'CYS'
 
     np = tin.topology.select('not protein')
     standard_names = True
@@ -1061,7 +1072,6 @@ def rest_min_omm(pdbin, pdbref=None, kr=1.0, maxcyc=200):
             else:
                 if r in ['HID', 'HIE', 'HIP', 'CYX', 'ASH', 'GLH']:
                     standard_names = False
-
     prmtop, inpcrd, stdout = leap(pdbin, ['protein.ff14SB', 'water.tip3p'])
 
     pdbamber = ambpdb(inpcrd, prmtop)
