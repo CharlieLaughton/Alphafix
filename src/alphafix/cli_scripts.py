@@ -31,7 +31,7 @@ def alpha_check_cli():
 
 def alpha_fix_cli():
     parser = ArgumentParser(
-        description="Fix missing residues in a PDB file using Alphafold.")
+        description="Fix missing atoms and residues in a PDB file using data from Alphafold.")
     parser.add_argument("-i", "--inpdb",
                         help="Input PDB file.", required=True)
     parser.add_argument("-o", "--outpdb",

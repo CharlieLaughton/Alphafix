@@ -34,6 +34,7 @@
 
 import mdtraj as mdt
 import numpy as np
+from alphafix._version import __version__
 
 from crossflow.tasks import SubprocessTask
 from crossflow.filehandling import FileHandler, FileHandle
@@ -601,12 +602,16 @@ def alpha_get(uniprot_id, session=None):
         session = requests.Session()
     base_url = f'https://alphafold.com/api/prediction/{uniprot_id}'
     response = session.get(base_url)
+    if response.status_code != 200:
+        raise ValueError(f'Error: failed to fetch data for {uniprot_id} from Alphafold API')
     data = response.json()
     if 'error' in data:
         raise ValueError(f'Error: {uniprot_id} not in Alphafold database')
 
     pdb_url = data[0]['pdbUrl']
     response2 = session.get(pdb_url)
+    if response2.status_code != 200:
+        raise ValueError(f'Error: failed to fetch PDB file for {uniprot_id} from {pdb_url}')
     fh = FileHandler()
     pdbout = fh.create('tmp.pdb')
     pdbout.write_text(response2.text)
@@ -720,12 +725,13 @@ def alpha_check(pdb_in, unicodes=None):
     t_protein = t_in.atom_slice(t_in.topology.select('protein and mass > 2.0'))
     t_protein = unique_chain_ids(t_protein)
     n_chains = t_protein.topology.n_chains
+
     if n_chains != len(unicodes):
         err_a = f'Error: there are {n_chains} chains in the PDB file but'
         err_b = f' you supplied {len(unicodes)} uniprot codes.'
         raise ValueError(err_a + err_b)
     # Step 1: generate an alphafold based starting structure
-    log0 = '*** ALPHACHECK V. 0.1 ***\n'
+    log0 = f'*** ALPHACHECK V. {__version__} ***\n'
     for i, chain in enumerate(t_protein.topology.chains):
         chain_indices = t_protein.topology.select(f"chainid {chain.index}")
         t_chain = t_protein.atom_slice(chain_indices)
@@ -780,7 +786,7 @@ def alpha_fix(pdb_in, unicodes=None, chains=None, trim=False):
         raise ValueError(err_a + err_b)
     # Step 1: generate an alphafold based starting structure
     t_alpha = None
-    log0 = '*** ALPHAFIX V. 0.1 ***\n'
+    log0 = f'*** ALPHAFIX V. {__version__} ***\n'
     for i, chain in enumerate(t_protein.topology.chains):
         chain_indices = t_protein.topology.select(f"chainid {chain.index}")
         t_chain = t_protein.atom_slice(chain_indices)
