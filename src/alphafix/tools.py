@@ -39,8 +39,10 @@ from alphafix._version import __version__
 from crossflow.tasks import SubprocessTask
 from crossflow.filehandling import FileHandler, FileHandle
 from functools import cache
-from enum import IntEnum
 import shutil
+
+from Bio import Align
+from Bio.Align import substitution_matrices
 
 import requests
 from pathlib import Path
@@ -238,134 +240,33 @@ def hetify(pdbin):
     return out_pdb
 
 
-# For the Smith-Waterman code:
-class Score(IntEnum):
-    MATCH = 1
-    MISMATCH = -1
-    GAP = -1
-
-
-# Assigning the constant values for the traceback
-class Trace(IntEnum):
-    STOP = 0
-    LEFT = 1
-    UP = 2
-    DIAGONAL = 3
-
-
 def smith_waterman(seq1, seq2):
-    '''A simple Smith-Waterman local alignment routine.
-
-    Adapted from:
-    https://github.com/slavianap/Smith-Waterman-Algorithm/blob/master/Script.py
-
-    Args:
-       seq1 (str): The first sequence
-       seq2 (str): The second sequence
-
-    Returns:
-        (str, str): The aligned sequences
-    '''
-    # Generating the empty matrices for storing scores and tracing
-    row = len(seq1) + 1
-    col = len(seq2) + 1
-    matrix = np.zeros(shape=(row, col), dtype=int)
-    tracing_matrix = np.zeros(shape=(row, col), dtype=int)
-
-    # Initialising the variables to find the highest scoring cell
-    max_score = -1
-    max_index = (-1, -1)
-
-    # Calculating the scores for all cells in the matrix
-    for i in range(1, row):
-        for j in range(1, col):
-            # Calculating the diagonal score (match score)
-            match_value = Score.MATCH if seq1[i - 1] == seq2[j - 1] \
-                            else Score.MISMATCH
-            diagonal_score = matrix[i - 1, j - 1] + match_value
-
-            # Calculating the vertical gap score
-            vertical_score = matrix[i - 1, j] + Score.GAP
-
-            # Calculating the horizontal gap score
-            horizontal_score = matrix[i, j - 1] + Score.GAP
-
-            # Taking the highest score
-            matrix[i, j] = max(0, diagonal_score, vertical_score,
-                               horizontal_score)
-
-            # Tracking where the cell's value is coming from
-            if matrix[i, j] == 0:
-                tracing_matrix[i, j] = Trace.STOP
-
-            elif matrix[i, j] == horizontal_score:
-                tracing_matrix[i, j] = Trace.LEFT
-
-            elif matrix[i, j] == vertical_score:
-                tracing_matrix[i, j] = Trace.UP
-
-            elif matrix[i, j] == diagonal_score:
-                tracing_matrix[i, j] = Trace.DIAGONAL
-
-            # Tracking the cell with the maximum score
-            if matrix[i, j] >= max_score:
-                max_index = (i, j)
-                max_score = matrix[i, j]
-
-    # Initialising the variables for tracing
-    aligned_seq1 = ""
-    aligned_seq2 = ""
-    current_aligned_seq1 = ""
-    current_aligned_seq2 = ""
-    (max_i, max_j) = max_index
-
-    # Tracing and computing the pathway with the local alignment
-    while tracing_matrix[max_i, max_j] != Trace.STOP:
-        if tracing_matrix[max_i, max_j] == Trace.DIAGONAL:
-            current_aligned_seq1 = seq1[max_i - 1]
-            current_aligned_seq2 = seq2[max_j - 1]
-            max_i = max_i - 1
-            max_j = max_j - 1
-
-        elif tracing_matrix[max_i, max_j] == Trace.UP:
-            current_aligned_seq1 = seq1[max_i - 1]
-            current_aligned_seq2 = '-'
-            max_i = max_i - 1
-
-        elif tracing_matrix[max_i, max_j] == Trace.LEFT:
-            current_aligned_seq1 = '-'
-            current_aligned_seq2 = seq2[max_j - 1]
-            max_j = max_j - 1
-
-        aligned_seq1 = aligned_seq1 + current_aligned_seq1
-        aligned_seq2 = aligned_seq2 + current_aligned_seq2
-
-    # Reversing the order of the sequences
-    aligned_seq1 = aligned_seq1[::-1]
-    aligned_seq2 = aligned_seq2[::-1]
-
-    #  Add unmatched ends, if any:
-    if max_i > 0 and max_j > 0:
-        n_extra = min(max_i, max_j)
-        aligned_seq1 = seq1[max_i-n_extra:max_i] + aligned_seq1
-        aligned_seq2 = seq2[max_j-n_extra:max_j] + aligned_seq2
-        max_i = max_i - n_extra
-        max_j = max_j - n_extra
-
-    if max_i > 0:
-        aligned_seq1 = seq1[:max_i] + aligned_seq1
-        aligned_seq2 = '-' * max_i + aligned_seq2
-    elif max_j > 0:
-        aligned_seq2 = seq2[:max_j] + aligned_seq2
-        aligned_seq1 = '-' * max_j + aligned_seq1
-
-    if max_index[0] < row - 1:
-        aligned_seq1 += seq1[max_index[0]:]
-        aligned_seq2 += '-' * (row - 1 - max_index[0])
-    elif max_index[1] < col - 1:
-        aligned_seq2 += seq2[max_index[1]:]
-        aligned_seq1 += '-' * (col - 1 - max_index[1])
-    return aligned_seq1, aligned_seq2
+    ''' Smith-Waterman alignment routine based on the Biopython implementation.'''
+    matrix = substitution_matrices.load("BLOSUM62")
+    aligner = Align.PairwiseAligner(mode="local", scoring="blastp")
+    aligner.substitution_matrix = matrix
+    alignments = aligner.align(seq1, seq2)
+    aln1 = alignments[0][0]
+    aln2 = alignments[0][1]
+    aligned = alignments[0].aligned
+    # Add unmatched ends, if any:
+    start1 = aligned[0][0][0]
+    start2 = aligned[1][0][0]
+    end1 = aligned[0][-1][-1]
+    end2 = aligned[1][-1][-1]
+    if start1 > 0:
+        aln1 = seq1[:start1] + aln1
+        aln2 = '-' * start1 + aln2
+    if end1 < len(seq1):
+        aln1 += seq1[end1:]
+        aln2 += '-' * (len(seq1) - end1)
+    if start2 > 0:
+        aln1 = '-' * start2 + aln1
+        aln2 = seq2[:start2] + aln2
+    if end2 < len(seq2):
+        aln1 += '-' * (len(seq2) - end2)
+        aln2 += seq2[end2:]
+    return aln1, aln2
 
 
 def aln_score(alignment):
@@ -672,7 +573,13 @@ def uniprot_diff(prot_pdb, uniprot_id, chain=None, trim=True):
         sl = seglengths[i_seg]
         j = i + sl
         if code[i] == '-':
-            if sl > 1:
+            if sl == 1:
+                log += f"  Missing residue: {aln[0][i]}{i+1}"
+                if not trim or (i_seg != 0 and i_seg != n_segs - 1):
+                    log += "\n"
+                else:
+                    log += " (Ignored)\n"
+            elif sl > 1:
                 log += "  Missing residues: "
                 log += f"{aln[0][i]}{i+1}-{aln[0][j-1]}{j}"
                 if not trim or (i_seg != 0 and i_seg != n_segs - 1):
@@ -689,9 +596,10 @@ def uniprot_diff(prot_pdb, uniprot_id, chain=None, trim=True):
                 r_in = t_in.topology.residue(ii).name
                 r_uniprot = t_uniprot.topology.residue(k).name
                 if r_in != r_uniprot:
-                    errmsg_a = f". Error: residue {ii+1} in input PDB does not"
-                    errmsg_b = f"   match residue {k+1} in Uniprot"
-                    raise ValueError(errmsg_a + errmsg_b)
+                    errmsg_a = f". Warning: residue {ii+1} ({r_in}) in input PDB does not"
+                    errmsg_b = f"   match residue {k+1} ({r_uniprot}) in Uniprot"
+                    # raise ValueError(errmsg_a + errmsg_b)
+                    log += errmsg_a + errmsg_b + "\n"
                 h_indx = t_in.topology.select(f'resid {ii} and mass > 2.0')
                 h_in = [t_in.topology.atom(h).name for h in h_indx]
                 a_indx = t_uniprot.topology.select(f'resid {k} and mass > 2.0')
@@ -793,9 +701,15 @@ def alpha_fix(pdb_in, unicodes=None, chains=None, trim=False):
         alpha = alpha_get(unicodes[i])
         log0 += f"Comparison of protein chain {chain.chain_id} "
         log0 += f"with uniprot entry {unicodes[i]}:\n"
-        log0 += uniprot_diff(t_chain, unicodes[i]) + "\n"
+        
         # Align the alphafold structure with the chain:
         aligned_alpha, aln = match_align(alpha, t_chain)
+        if aln[0].count('-') > 0:
+            log0 += f"Error: chain {i} has {aln[0].count('-')}"
+            log0 += f" residues not found in uniprot entry {unicodes[i]}\n"
+            log0 += f"  These residues cannot be fixed by this program.\n"
+            raise ValueError(log0)
+        log0 += uniprot_diff(t_chain, unicodes[i]) + "\n"
         score = aln_score((aln[0], aln[2]))
         identity = score[0] / t_chain.topology.n_residues
         if identity < 0.9:
@@ -812,7 +726,7 @@ def alpha_fix(pdb_in, unicodes=None, chains=None, trim=False):
         t_tmp = mdt.load_pdb(aligned_alpha)
         t_tmp.topology.chain(0).chain_id = chain.chain_id
         if trim:
-            sel = t_tmp.topology.select(f"resid {istart} to {iend + 1}")
+            sel = t_tmp.topology.select(f"resid {istart} to {iend}")
         else:
             sel = t_tmp.topology.select("all")
         if t_alpha is None:
