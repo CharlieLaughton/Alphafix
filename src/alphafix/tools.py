@@ -159,13 +159,15 @@ def unique_chain_ids(t):
         mdt.Trajectory: A copy of the input trajectory with unique chain ids.
     '''
     t = _trajify(t)
-    t = mdt.Trajectory(t.xyz.copy(), t.topology.copy())
+    tcopy = mdt.Trajectory(t.xyz.copy(), t.topology.copy())
     chain_names = [c.chain_id for c in t.topology.chains]
+    if len(set(chain_names)) < len(chain_names):
+        raise ValueError('Error: duplicate chain IDs found in the input structure')
     if ' ' not in chain_names:
         return t
     chain_letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
     j = 0
-    for i, chain in enumerate(t.topology.chains):
+    for i, chain in enumerate(tcopy.topology.chains):
         if chain.chain_id == ' ':
             # Assign a new chain id
             while chain_letters[j] in chain_names:
@@ -176,7 +178,7 @@ def unique_chain_ids(t):
                     return t
             chain.chain_id = chain_letters[j]
             chain_names[i] = chain.chain_id
-    return t
+    return tcopy
 
 
 def bumps(prot_in, cutoff=0.2):
@@ -319,6 +321,7 @@ def match_align(pdb_in, pdb_ref, cutoff=0.02, renumber=False, align=True):
 
    Returns:
         Filehandle: The path to the aligned PDB file.
+        Alignment: A tuple of the aligned sequences (pdb_in, matches, pdb_ref).
 
     '''
     t_in = _trajify(pdb_in)
@@ -435,6 +438,67 @@ def sp_search(seq):
     return matches
 
 
+def uni_find_frompdb(pdb_in):
+    '''
+    Find the best matching SwissProt sequences for each chain in a PDB file.
+
+    Args:
+        pdb_in (str, Path, or FileHandle): A PDB file.
+
+    Returns:
+        dict: Uniprot codes, keyed per protein chain in the
+                    PDB file. Chains without valid codes get None
+
+    '''
+    results = {}
+    pdb_in = _pdbify(pdb_in)
+    traj_in = _trajify(pdb_in)
+    traj_in = traj_in.atom_slice(traj_in.topology.select('protein'))
+    traj_in = unique_chain_ids(traj_in)
+    chain_names = [c.chain_id for c in traj_in.topology.chains]
+    results = {c: None for c in chain_names}
+        
+    content = Path(pdb_in).read_text()
+    for line in content.split('\n'):
+        if line.startswith('DBREF '):
+            chain_id = line[12:13]  # Extract chain ID from DBREF line
+            database = line[26:32].strip()
+            if database =='UNP':
+                uniprot_id = line[33:41].strip()
+                results[chain_id] = uniprot_id
+    return results
+
+def uni_find_fromblastp(pdb_in, chain_id):
+    '''
+    Find the best matching SwissProt sequence for a given chain in a PDB file using BLAST.
+
+    Args:
+        pdb_in (str, Path, or FileHandle): A PDB file.
+        chain_id (str): The chain ID to search for.
+
+    Returns:
+        str: The Uniprot code of the best matching sequence in SwissProt.
+
+    '''
+    traj_in = _trajify(pdb_in)
+    traj_in = traj_in.atom_slice(traj_in.topology.select('protein'))
+    traj_in = unique_chain_ids(traj_in)
+
+    chain_indices = [a.index for a in traj_in.topology.atoms if a.residue.chain.chain_id == chain_id]
+    if len(chain_indices) == 0:
+        raise ValueError(f'Error: chain {chain_id} not found in PDB file')
+    t_chain = traj_in.atom_slice(chain_indices)
+    seq = t_chain.topology.to_fasta()[0]
+    matches = sp_search(seq)
+    if len(matches) == 0:
+        raise ValueError(f'Error: no BLAST matches found for chain {chain_id}')
+    best = matches[0]
+    if best['percent_identity'] < 90.0:
+        print(f'Warning: only {best["percent_identity"]}% identity for'
+              f' chain {chain_id}', file=sys.stderr)
+    return best['uniprotAccession']
+
+
 def uni_find(pdb_in):
     '''
     Find the best matching SwissProt sequences for each chain in a PDB file.
@@ -443,45 +507,18 @@ def uni_find(pdb_in):
         pdb_in (str, Path, or FileHandle): A PDB file.
 
     Returns:
-        [str, ...]: Uniprot codes, one per protein chain in the
+        dict: Uniprot codes, keyed by protein chain in the
                     PDB file.
 
     '''
-    results = []
-    content = Path(pdb_in).read_text()
-    if 'DBREF' not in content:
-        print('Warning: no DBREF records found in PDB file, '
-              'results may be unreliable', file=sys.stderr)
-    else:
-        for line in content.split('\n'):
-            if line.startswith('DBREF'):
-                results.append(line[33:41].strip())
-    t = _trajify(pdb_in)
-    t_protein = t.atom_slice(t.topology.select('protein and mass > 2.0'))
-    t_protein = unique_chain_ids(t_protein)
-    n_chains = t_protein.topology.n_chains
-    if n_chains == len(results):
-        return results
-    else:
-        if len(results) > 0:
-            print(f'Warning: found {n_chains} protein chains but only '
-                  f'{len(results)} DBREF records', file=sys.stderr)
-        print('Using BLAST to identify sequences instead', file=sys.stderr)
-        results = []
+    results = {}
+    codes = uni_find_frompdb(pdb_in)
+    for chain_id, uniprot_id in codes.items():
+        if uniprot_id is not None:
+            results[chain_id] = (uniprot_id, 'from DBREF')
+        else:
+            results[chain_id] = (uni_find_fromblastp(pdb_in, chain_id), 'from BLAST')
 
-        for i, chain in enumerate(t_protein.topology.chains):
-            chain_indices = t_protein.topology.select(f"chainid {chain.index}")
-            t_chain = t_protein.atom_slice(chain_indices)
-            seq = t_chain.topology.to_fasta()[0]
-            matches = sp_search(seq)
-            if len(matches) == 0:
-                raise ValueError('Error: no matches found for'
-                                 f' chain {chain.chain_id}')
-            best = matches[0]
-            if best['percent_identity'] < 90.0:
-                print(f'Warning: only {best["percent_identity"]}% identity'
-                      f' for chain {chain.chain_id}', file=sys.stderr)
-            results.append(best['uniprotAccession'])
     return results
 
 
@@ -627,26 +664,53 @@ def alpha_check(pdb_in, unicodes=None):
         str: A report of the compatibility check.
 
     '''
+    log0 = f'*** ALPHACHECK V. {__version__} ***\n'
+
+    # Step 1: sanity check the PDB file and determine the Uniprot codes for each chain
     if unicodes is None:
         unicodes = uni_find(pdb_in)
+    else:
+        ttmp = _trajify(pdb_in)
+        ttmp  = ttmp.atom_slice(ttmp.topology.select('protein'))
+        ttmp = unique_chain_ids(ttmp)
+        chain_ids = [c.chain_id for c in ttmp.topology.chains]
+        if len(unicodes) != len(chain_ids):
+            raise ValueError(f'Error: there are {len(chain_ids)} chains in the PDB file but'
+                             f' you supplied {len(unicodes)} uniprot codes.')
+        unicodes = {chain_ids[i]: (unicodes[i], 'from user') for i in range(len(chain_ids))}
+
     t_in = _trajify(pdb_in, standard_names=True)
     t_protein = t_in.atom_slice(t_in.topology.select('protein and mass > 2.0'))
     t_protein = unique_chain_ids(t_protein)
     n_chains = t_protein.topology.n_chains
 
-    if n_chains != len(unicodes):
-        err_a = f'Error: there are {n_chains} chains in the PDB file but'
-        err_b = f' you supplied {len(unicodes)} uniprot codes.'
-        raise ValueError(err_a + err_b)
-    # Step 1: generate an alphafold based starting structure
-    log0 = f'*** ALPHACHECK V. {__version__} ***\n'
-    for i, chain in enumerate(t_protein.topology.chains):
+    log0 += f'Input PDB file: {pdb_in}\n'
+    log0 += f'Number of protein chains: {n_chains}\n'
+    
+    for chain in t_protein.topology.chains:
+        chain_id = chain.chain_id
+        unicodes.setdefault(chain_id, ('Unknown', 'not found'))
+        log0 += f'  Chain {chain_id}: matched with {unicodes[chain_id][0]} ({unicodes[chain_id][1]})\n'
+    
+    # Step 2: Confirm an Alphafold structure exists for each Uniprot code
+    unique_codes = {u[0] for u in unicodes.values() if u[0] != 'Unknown'} 
+    for code in unique_codes:
+        try:
+            _ = alpha_get(code)
+        except ValueError as e:
+            log0 += f'  Error: cannot find Alphafold structure for Uniprot ID {code}\n'
+            return log0 + str(e) + "\n"
+
+    # Step 3: Compare each chain with its corresponding Uniprot entry
+    
+    for chain in t_protein.topology.chains:
         chain_indices = t_protein.topology.select(f"chainid {chain.index}")
+        chain_id = chain.chain_id
+
         t_chain = t_protein.atom_slice(chain_indices)
-        _ = alpha_get(unicodes[i])
-        log0 += f"Comparison of protein chain {chain.chain_id} "
-        log0 += f"with uniprot entry {unicodes[i]}:\n"
-        log0 += uniprot_diff(t_chain, unicodes[i]) + "\n"
+        log0 += f"Comparison of protein chain {chain_id} "
+        log0 += f"with uniprot entry {unicodes[chain_id][0]}:\n"
+        log0 += uniprot_diff(t_chain, unicodes[chain_id][0]) + "\n"
     return log0
 
 
@@ -670,8 +734,20 @@ def alpha_fix(pdb_in, unicodes=None, chains=None, trim=False):
                            and a report of the fixing process.
 
     '''
+    log0 = f'*** ALPHAFIX V. {__version__} ***\n'
+
     if unicodes is None:
         unicodes = uni_find(pdb_in)
+    else:
+        ttmp = _trajify(pdb_in)
+        ttmp  = ttmp.atom_slice(ttmp.topology.select('protein'))
+        ttmp = unique_chain_ids(ttmp)
+        chain_ids = [c.chain_id for c in ttmp.topology.chains]
+        if len(unicodes) != len(chain_ids):
+            raise ValueError(f'Error: there are {len(chain_ids)} chains in the PDB file but'
+                             f' you supplied {len(unicodes)} uniprot codes.')
+        unicodes = {chain_ids[i]: (unicodes[i], 'from user') for i in range(len(chain_ids))}
+
     t_in = _trajify(pdb_in, standard_names=True)
     if chains is not None:
         chain_ids = [c.chain_id for c in t_in.topology.chains]
@@ -682,39 +758,42 @@ def alpha_fix(pdb_in, unicodes=None, chains=None, trim=False):
         select = ' or '.join([f'chainid {i}' for i in range(n_chains)
                               if chain_ids[i] in chains])
         t_in = t_in.atom_slice(t_in.topology.select(f'({select})'))
-        unicodes = [unicodes[i] for i, c in enumerate(chains)
-                    if c in chain_ids]
+        unicodes = [unicodes[c] for c in chains]
     t_protein = t_in.atom_slice(t_in.topology.select('protein and mass > 2.0'))
     t_nonprotein = t_in.atom_slice(t_in.topology.select('not protein'))
     t_protein = unique_chain_ids(t_protein)
     n_chains = t_protein.topology.n_chains
+    
     if n_chains != len(unicodes):
         err_a = f'Error: there are {n_chains} chains in the PDB file but'
         err_b = f' you supplied {len(unicodes)} uniprot codes.'
+        log0 += err_a + err_b + "\n"
         raise ValueError(err_a + err_b)
-    # Step 1: generate an alphafold based starting structure
+    
+    # Generate an alphafold based starting structure
     t_alpha = None
-    log0 = f'*** ALPHAFIX V. {__version__} ***\n'
-    for i, chain in enumerate(t_protein.topology.chains):
+    
+    for chain in t_protein.topology.chains:
+        chain_id = chain.chain_id
         chain_indices = t_protein.topology.select(f"chainid {chain.index}")
         t_chain = t_protein.atom_slice(chain_indices)
-        alpha = alpha_get(unicodes[i])
+        alpha = alpha_get(unicodes[chain_id][0])
         log0 += f"Comparison of protein chain {chain.chain_id} "
-        log0 += f"with uniprot entry {unicodes[i]}:\n"
-        
+        log0 += f"with uniprot entry {unicodes[chain_id][0]} ({unicodes[chain_id][1]}):\n"
+
         # Align the alphafold structure with the chain:
         aligned_alpha, aln = match_align(alpha, t_chain)
         if aln[0].count('-') > 0:
-            log0 += f"Error: chain {i} has {aln[0].count('-')}"
-            log0 += f" residues not found in uniprot entry {unicodes[i]}\n"
+            log0 += f"Error: chain {chain_id} has {aln[0].count('-')}"
+            log0 += f" residues not found in uniprot entry {unicodes[chain_id][0]}\n"
             log0 += f"  These residues cannot be fixed by this program.\n"
             raise ValueError(log0)
-        log0 += uniprot_diff(t_chain, unicodes[i]) + "\n"
+        log0 += uniprot_diff(t_chain, unicodes[chain_id][0]) + "\n"
         score = aln_score((aln[0], aln[2]))
         identity = score[0] / t_chain.topology.n_residues
         if identity < 0.9:
             wng = f"Warning: only {int(identity * 100)}% identity between"
-            wng += f" {unicodes[i]} and chain {i}"
+            wng += f" {unicodes[chain_id][0]} and chain {chain_id}"
             print(wng, file=sys.stderr)
         istart = 0
         while aln[2][istart] == '-':

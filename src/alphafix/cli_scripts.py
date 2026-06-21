@@ -5,7 +5,7 @@ from alphafix.tools import alpha_check, alpha_fix
 
 def alpha_check_cli():
     parser = ArgumentParser(
-        description="Check how well a PDB file matches its UniProt sequences.")
+        description="Check a PDB file for completeness relative to its AlphaFold Database prediction.")
     parser.add_argument("-i", "--inpdb",
                         help="Input PDB file.", required=True)
     parser.add_argument("-u", "--uniprot_ids", nargs='*', required=False,
@@ -54,7 +54,7 @@ def alpha_fix_cli():
         out_pdb, log = alpha_fix(args.inpdb, args.uniprot_ids,
                                  chains=args.chains, trim=not args.no_trim)
     except Exception as e:
-        print(f"{e}")
+        print(f"Error during processing: {e}")
         return
     out_pdb.save(args.outpdb)
     if args.log:
