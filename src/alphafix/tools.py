@@ -47,6 +47,7 @@ from Bio.Align import substitution_matrices
 import requests
 from pathlib import Path
 import sys
+from collections import defaultdict
 
 Structure = (mdt.Trajectory, str, Path, FileHandle)
 
@@ -161,8 +162,7 @@ def unique_chain_ids(t):
     t = _trajify(t)
     tcopy = mdt.Trajectory(t.xyz.copy(), t.topology.copy())
     chain_names = [c.chain_id for c in t.topology.chains]
-    if len(set(chain_names)) < len(chain_names):
-        raise ValueError('Error: duplicate chain IDs found in the input structure')
+
     if ' ' not in chain_names:
         return t
     chain_letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
@@ -178,6 +178,11 @@ def unique_chain_ids(t):
                     return t
             chain.chain_id = chain_letters[j]
             chain_names[i] = chain.chain_id
+
+    # Check for duplicates:
+    chain_names = [c.chain_id for c in tcopy.topology.chains]
+    if len(set(chain_names)) < len(chain_names):
+        raise ValueError('Error: duplicate chain IDs found in input structure')
     return tcopy
 
 
@@ -204,7 +209,7 @@ def bumps(prot_in, cutoff=0.2):
 
     result = ''
     for i in np.argsort(d):
-        if d[i] < 0.2:
+        if d[i] < cutoff:
             ra = str(prot_in.topology.residue(contacts[i][0]))
             rb = str(prot_in.topology.residue(contacts[i][1]))
             result += f'{ra:6s} - '
@@ -218,7 +223,7 @@ def hetify(pdbin):
 
     Args:
         pdbin (Structure): The input PDB file
-    
+
     Returns:
         FileHandle: A PDB file with HETATM records for non-protein atoms.
     '''
@@ -243,7 +248,15 @@ def hetify(pdbin):
 
 
 def smith_waterman(seq1, seq2):
-    ''' Smith-Waterman alignment routine based on the Biopython implementation.'''
+    ''' Smith-Waterman alignment routine based on the Biopython implementation.
+
+    Args:
+        seq1 (str): The first sequence to align
+        seq2 (str): The second sequence to align
+
+    Returns:
+        tuple: The two aligned sequences
+    '''
     matrix = substitution_matrices.load("BLOSUM62")
     aligner = Align.PairwiseAligner(mode="local", scoring="blastp")
     aligner.substitution_matrix = matrix
@@ -302,6 +315,42 @@ def aln_score(alignment):
 #
 
 
+def _constant_factory(value):
+    return lambda: value
+
+
+three2one = defaultdict(_constant_factory('?'))
+three2one.update({
+    'ALA': 'A', 'CYS': 'C', 'CYX': 'C', 'ASP': 'D', 'GLU': 'E', 'PHE': 'F',
+    'GLY': 'G', 'HIS': 'H', 'HID': 'H', 'HIE': 'H', 'HIP': 'H', 'ILE': 'I',
+    'LYS': 'K', 'LEU': 'L', 'MET': 'M', 'ASN': 'N', 'PRO': 'P', 'GLN': 'Q',
+    'ARG': 'R', 'SER': 'S', 'THR': 'T', 'VAL': 'V', 'TRP': 'W', 'TYR': 'Y'})
+
+
+def sequences(top):
+    '''Extract a list of 1-letter code sequences for the chains in the topology
+
+    A stand-in for topology.to_fasta() as that can be confused by non-standard
+    residues.
+
+    Args:
+        top: MDTraj topology
+
+    Returns:
+        [str, ...] list of strings of 1-letter amino acid codes, one per chain
+
+        Any residues with non-standard names appear as "?".
+
+    '''
+    seqs = []
+    for c in top.chains:
+        seq = ''
+        for r in c.residues:
+            seq += three2one[r.name]
+        seqs.append(seq)
+    return seqs
+
+
 def match_align(pdb_in, pdb_ref, cutoff=0.02, renumber=False, align=True):
     '''
     Superimpose pdb_in onto pdb_ref, based on sequence alignment
@@ -314,10 +363,11 @@ def match_align(pdb_in, pdb_ref, cutoff=0.02, renumber=False, align=True):
         pdb_ref (Structure):  The reference structure to align to.
         cutoff (float, optional): The distance cutoff for defining close
                   contacts (default: 0.02 nm).
-        renumber (bool, optional): If True, the returned PDB file has its residue
-                  sequence numbers changed to match those in the reference PDB.
-        align (bool, optional): If False, no structure superposition is performed
-                  (only useful if renumber=True!).
+        renumber (bool, optional): If True, the returned PDB file has its
+                  residue sequence numbers changed to match those in the
+                  reference PDB.
+        align (bool, optional): If False, no structure superposition is
+                    performed(only useful if renumber=True!).
 
    Returns:
         Filehandle: The path to the aligned PDB file.
@@ -327,8 +377,8 @@ def match_align(pdb_in, pdb_ref, cutoff=0.02, renumber=False, align=True):
     t_in = _trajify(pdb_in)
     t_ref = _trajify(pdb_ref)
 
-    seq_in = t_in.topology.to_fasta()
-    seq_ref = t_ref.topology.to_fasta()
+    seq_in = sequences(t_in.topology)
+    seq_ref = sequences(t_ref.topology)
     if len(seq_in) != len(seq_ref):
         raise ValueError(
             'Error: input and reference sequences must have'
@@ -377,6 +427,7 @@ def match_align(pdb_in, pdb_ref, cutoff=0.02, renumber=False, align=True):
     while unconverged:
         atom_indices = [p[0] for p in pairs]
         ref_atom_indices = [p[1] for p in pairs]
+        n_pairs = len(pairs)
         t_out = t_copy.superpose(t_ref, atom_indices=atom_indices,
                                  ref_atom_indices=ref_atom_indices)
         dx = t_out.xyz[0, atom_indices] - t_ref.xyz[0, ref_atom_indices]
@@ -384,12 +435,11 @@ def match_align(pdb_in, pdb_ref, cutoff=0.02, renumber=False, align=True):
         if err.max() > cutoff:
             ierr = np.argsort(err)
             icut = np.argmax(err[ierr] > cutoff)
-            lerr = len(err)
-            r1 = (lerr-icut) // 2
-            r2 = lerr // 10
-            r = min(r1, r2)
-            r = max(r, 1)
-            discards = ierr[-r:]
+            id1 = (n_pairs-icut) // 2  # half the number of pairs above
+            # the tolerance
+            id2 = n_pairs // 10  # one-tenth the number of remaining pairs
+            ndiscards = max(min(id1, id2), 1)
+            discards = ierr[-ndiscards:]
             old_pairs = pairs
             pairs = []
             for i, p in enumerate(old_pairs):
@@ -407,7 +457,7 @@ def match_align(pdb_in, pdb_ref, cutoff=0.02, renumber=False, align=True):
 @cache
 def sp_search(seq):
     '''
-    Search swissprot for a sequepnce using a local installation of blastp
+    Search swissprot for a sequence using a local installation of blastp
 
     Args:
         seq (str): The query sequence to search for.
@@ -457,20 +507,23 @@ def uni_find_frompdb(pdb_in):
     traj_in = unique_chain_ids(traj_in)
     chain_names = [c.chain_id for c in traj_in.topology.chains]
     results = {c: None for c in chain_names}
-        
-    content = Path(pdb_in).read_text()
+
+    content = pdb_in.read_text()
     for line in content.split('\n'):
         if line.startswith('DBREF '):
             chain_id = line[12:13]  # Extract chain ID from DBREF line
             database = line[26:32].strip()
-            if database =='UNP':
+            if database == 'UNP':
                 uniprot_id = line[33:41].strip()
                 results[chain_id] = uniprot_id
     return results
 
+
 def uni_find_fromblastp(pdb_in, chain_id):
     '''
-    Find the best matching SwissProt sequence for a given chain in a PDB file using BLAST.
+    Find the best matching SwissProt sequence for a given chain in a PDB file
+
+    Uses BLAST.
 
     Args:
         pdb_in (str, Path, or FileHandle): A PDB file.
@@ -484,11 +537,12 @@ def uni_find_fromblastp(pdb_in, chain_id):
     traj_in = traj_in.atom_slice(traj_in.topology.select('protein'))
     traj_in = unique_chain_ids(traj_in)
 
-    chain_indices = [a.index for a in traj_in.topology.atoms if a.residue.chain.chain_id == chain_id]
+    chain_indices = [a.index for a in traj_in.topology.atoms
+                     if a.residue.chain.chain_id == chain_id]
     if len(chain_indices) == 0:
         raise ValueError(f'Error: chain {chain_id} not found in PDB file')
     t_chain = traj_in.atom_slice(chain_indices)
-    seq = t_chain.topology.to_fasta()[0]
+    seq = sequences(t_chain.topology)[0]
     matches = sp_search(seq)
     if len(matches) == 0:
         raise ValueError(f'Error: no BLAST matches found for chain {chain_id}')
@@ -517,7 +571,8 @@ def uni_find(pdb_in):
         if uniprot_id is not None:
             results[chain_id] = (uniprot_id, 'from DBREF')
         else:
-            results[chain_id] = (uni_find_fromblastp(pdb_in, chain_id), 'from BLAST')
+            results[chain_id] = (uni_find_fromblastp(pdb_in, chain_id),
+                                 'from BLAST')
 
     return results
 
@@ -525,8 +580,7 @@ def uni_find(pdb_in):
 @cache
 def alpha_get(uniprot_id, session=None):
     '''
-    Get the Alphafold structure with the given Uniprot Id
-    If it exists
+    Get the Alphafold structure with the given Uniprot Id If it exists
 
     Args:
         uniprot_id (str): The Uniprot ID to retrieve the structure for.
@@ -541,7 +595,8 @@ def alpha_get(uniprot_id, session=None):
     base_url = f'https://alphafold.com/api/prediction/{uniprot_id}'
     response = session.get(base_url)
     if response.status_code != 200:
-        raise ValueError(f'Error: failed to fetch data for {uniprot_id} from Alphafold API')
+        raise ValueError(f'Error: failed to fetch data for {uniprot_id}'
+                         'from Alphafold API')
     data = response.json()
     if 'error' in data:
         raise ValueError(f'Error: {uniprot_id} not in Alphafold database')
@@ -549,7 +604,8 @@ def alpha_get(uniprot_id, session=None):
     pdb_url = data[0]['pdbUrl']
     response2 = session.get(pdb_url)
     if response2.status_code != 200:
-        raise ValueError(f'Error: failed to fetch PDB file for {uniprot_id} from {pdb_url}')
+        raise ValueError(f'Error: failed to fetch PDB file for {uniprot_id}'
+                         f' from {pdb_url}')
     fh = FileHandler()
     pdbout = fh.create('tmp.pdb')
     pdbout.write_text(response2.text)
@@ -563,9 +619,10 @@ def uniprot_diff(prot_pdb, uniprot_id, chain=None, trim=True):
     Args:
         prot_pdb (Structure):  protein to compare
         uniprot_id (str): Uniprot ID to compare with
-        chain (str, optional): chain ID to compare with, if None, all chains are
-                          compared
-        trim (bool, optional): whether to note missing residues at N- and C-terminii
+        chain (str, optional): chain ID to compare with, if None, all chains
+                               are compared
+        trim (bool, optional): whether to note missing residues at N- and
+                               C-terminii
 
     Returns:
         str: report of differences
@@ -633,8 +690,9 @@ def uniprot_diff(prot_pdb, uniprot_id, chain=None, trim=True):
                 r_in = t_in.topology.residue(ii).name
                 r_uniprot = t_uniprot.topology.residue(k).name
                 if r_in != r_uniprot:
-                    errmsg_a = f". Warning: residue {ii+1} ({r_in}) in input PDB does not"
-                    errmsg_b = f"   match residue {k+1} ({r_uniprot}) in Uniprot"
+                    errmsg_a = f"  Warning: residue {ii+1} ({r_in}) in PDB"
+                    errmsg_b = f"   does not match residue {k+1} ({r_uniprot})"
+                    "in Uniprot"
                     # raise ValueError(errmsg_a + errmsg_b)
                     log += errmsg_a + errmsg_b + "\n"
                 h_indx = t_in.topology.select(f'resid {ii} and mass > 2.0')
@@ -666,43 +724,66 @@ def alpha_check(pdb_in, unicodes=None):
     '''
     log0 = f'*** ALPHACHECK V. {__version__} ***\n'
 
-    # Step 1: sanity check the PDB file and determine the Uniprot codes for each chain
-    if unicodes is None:
-        unicodes = uni_find(pdb_in)
-    else:
-        ttmp = _trajify(pdb_in)
-        ttmp  = ttmp.atom_slice(ttmp.topology.select('protein'))
-        ttmp = unique_chain_ids(ttmp)
-        chain_ids = [c.chain_id for c in ttmp.topology.chains]
-        if len(unicodes) != len(chain_ids):
-            raise ValueError(f'Error: there are {len(chain_ids)} chains in the PDB file but'
-                             f' you supplied {len(unicodes)} uniprot codes.')
-        unicodes = {chain_ids[i]: (unicodes[i], 'from user') for i in range(len(chain_ids))}
+    # Step 1: sanity check the PDB file and determine the Uniprot codes
+    # for each chain
 
-    t_in = _trajify(pdb_in, standard_names=True)
-    t_protein = t_in.atom_slice(t_in.topology.select('protein and mass > 2.0'))
+    mod_chain_ids = False
+    bad_residue_names = False
+    t_protein = _trajify(pdb_in, standard_names=False)
+    t_protein = t_protein.atom_slice(
+        t_protein.topology.select('protein and mass > 2.0'))
+    chain_ids = [c.chain_id for c in t_protein.topology.chains]
+    if ' ' in chain_ids:
+        mod_chain_ids = True
     t_protein = unique_chain_ids(t_protein)
     n_chains = t_protein.topology.n_chains
 
     log0 += f'Input PDB file: {pdb_in}\n'
     log0 += f'Number of protein chains: {n_chains}\n'
-    
+    seqs = sequences(t_protein.topology)
+    for i, seq in enumerate(seqs):
+        if '?' in seq:
+            bad_residue_names = True
+            for r in t_protein.topology.chain(i).residues:
+                if three2one[r.name] == '?':
+                    log0 += f'  Error: chain {chain_ids[i]}'
+                    f" contains non-standard residue {r.name}"
+                    f" at position {r.resSeq}\n"
+    if bad_residue_names:
+        return log0
+
+    if unicodes is None:
+        unicodes = uni_find(pdb_in)
+    else:
+        chain_ids = [c.chain_id for c in t_protein.topology.chains]
+        if len(unicodes) != len(chain_ids):
+            raise ValueError(f'Error: there are {len(chain_ids)}'
+                             ' chains in the PDB file but'
+                             f' you supplied {len(unicodes)} uniprot codes.')
+        unicodes = {chain_ids[i]: (unicodes[i], 'from user')
+                    for i in range(len(chain_ids))}
+
+    if mod_chain_ids:
+        log0 += '** Warning: chain IDs were modified to be unique **\n\n'
+
     for chain in t_protein.topology.chains:
         chain_id = chain.chain_id
         unicodes.setdefault(chain_id, ('Unknown', 'not found'))
-        log0 += f'  Chain {chain_id}: matched with {unicodes[chain_id][0]} ({unicodes[chain_id][1]})\n'
-    
+        log0 += f'  Chain {chain_id}: matched with {unicodes[chain_id][0]}'
+        f'({unicodes[chain_id][1]})\n'
+
     # Step 2: Confirm an Alphafold structure exists for each Uniprot code
-    unique_codes = {u[0] for u in unicodes.values() if u[0] != 'Unknown'} 
+    unique_codes = {u[0] for u in unicodes.values() if u[0] != 'Unknown'}
     for code in unique_codes:
         try:
             _ = alpha_get(code)
         except ValueError as e:
-            log0 += f'  Error: cannot find Alphafold structure for Uniprot ID {code}\n'
+            log0 += '  Error: cannot find Alphafold structure for Uniprot'
+            f'ID {code}\n'
             return log0 + str(e) + "\n"
 
     # Step 3: Compare each chain with its corresponding Uniprot entry
-    
+
     for chain in t_protein.topology.chains:
         chain_indices = t_protein.topology.select(f"chainid {chain.index}")
         chain_id = chain.chain_id
@@ -740,13 +821,15 @@ def alpha_fix(pdb_in, unicodes=None, chains=None, trim=False):
         unicodes = uni_find(pdb_in)
     else:
         ttmp = _trajify(pdb_in)
-        ttmp  = ttmp.atom_slice(ttmp.topology.select('protein'))
+        ttmp = ttmp.atom_slice(ttmp.topology.select('protein'))
         ttmp = unique_chain_ids(ttmp)
         chain_ids = [c.chain_id for c in ttmp.topology.chains]
         if len(unicodes) != len(chain_ids):
-            raise ValueError(f'Error: there are {len(chain_ids)} chains in the PDB file but'
+            raise ValueError(f'Error: there are {len(chain_ids)} chains in the'
+                             ' PDB file but'
                              f' you supplied {len(unicodes)} uniprot codes.')
-        unicodes = {chain_ids[i]: (unicodes[i], 'from user') for i in range(len(chain_ids))}
+        unicodes = {chain_ids[i]: (unicodes[i], 'from user')
+                    for i in range(len(chain_ids))}
 
     t_in = _trajify(pdb_in, standard_names=True)
     if chains is not None:
@@ -763,30 +846,32 @@ def alpha_fix(pdb_in, unicodes=None, chains=None, trim=False):
     t_nonprotein = t_in.atom_slice(t_in.topology.select('not protein'))
     t_protein = unique_chain_ids(t_protein)
     n_chains = t_protein.topology.n_chains
-    
+
     if n_chains != len(unicodes):
         err_a = f'Error: there are {n_chains} chains in the PDB file but'
         err_b = f' you supplied {len(unicodes)} uniprot codes.'
         log0 += err_a + err_b + "\n"
         raise ValueError(err_a + err_b)
-    
+
     # Generate an alphafold based starting structure
     t_alpha = None
-    
-    for chain in t_protein.topology.chains:
+
+    for ic, chain in enumerate(t_protein.topology.chains):
         chain_id = chain.chain_id
         chain_indices = t_protein.topology.select(f"chainid {chain.index}")
         t_chain = t_protein.atom_slice(chain_indices)
         alpha = alpha_get(unicodes[chain_id][0])
         log0 += f"Comparison of protein chain {chain.chain_id} "
-        log0 += f"with uniprot entry {unicodes[chain_id][0]} ({unicodes[chain_id][1]}):\n"
+        log0 += f"with uniprot entry {unicodes[chain_id][0]} "
+        f"({unicodes[chain_id][1]}):\n"
 
         # Align the alphafold structure with the chain:
         aligned_alpha, aln = match_align(alpha, t_chain)
         if aln[0].count('-') > 0:
             log0 += f"Error: chain {chain_id} has {aln[0].count('-')}"
-            log0 += f" residues not found in uniprot entry {unicodes[chain_id][0]}\n"
-            log0 += f"  These residues cannot be fixed by this program.\n"
+            log0 += " residues not found in uniprot entry "
+            f"{unicodes[chain_id][0]}\n"
+            log0 += "  These residues cannot be fixed by this program.\n"
             raise ValueError(log0)
         log0 += uniprot_diff(t_chain, unicodes[chain_id][0]) + "\n"
         score = aln_score((aln[0], aln[2]))
@@ -795,6 +880,7 @@ def alpha_fix(pdb_in, unicodes=None, chains=None, trim=False):
             wng = f"Warning: only {int(identity * 100)}% identity between"
             wng += f" {unicodes[chain_id][0]} and chain {chain_id}"
             print(wng, file=sys.stderr)
+
         istart = 0
         while aln[2][istart] == '-':
             istart += 1
@@ -803,6 +889,20 @@ def alpha_fix(pdb_in, unicodes=None, chains=None, trim=False):
             iend -= 1
 
         t_tmp = mdt.load_pdb(aligned_alpha)
+        # Process any mutations by renaming the residue in the alphafold
+        # structure and removing the sidechain atoms (they will be rebuilt
+        # later)
+        j = -1
+        for i, c in enumerate(aln[0]):
+            if aln[2][i] != '-':
+                j += 1
+                if aln[2][i] != aln[0][i]:
+                    mut_to = t_chain.topology.residue(j).name
+                    except_sidechain = t_tmp.topology.select(
+                        f"backbone or not resid {i}")
+                    t_tmp = t_tmp.atom_slice(except_sidechain)
+                    t_tmp.topology.residue(i).name = mut_to
+
         t_tmp.topology.chain(0).chain_id = chain.chain_id
         if trim:
             sel = t_tmp.topology.select(f"resid {istart} to {iend}")
@@ -812,7 +912,7 @@ def alpha_fix(pdb_in, unicodes=None, chains=None, trim=False):
             t_alpha = t_tmp.atom_slice(sel)
         else:
             t_alpha = t_alpha.stack(t_tmp.atom_slice(sel), keep_resSeq=True)
-            t_alpha.topology.chain(i).chain_id = chain.chain_id
+            t_alpha.topology.chain(ic).chain_id = chain.chain_id
 
     t_alpha_top = t_alpha.topology
     # Renumber the original protein to match the alphafold residue numbers:
@@ -1049,7 +1149,7 @@ def rest_min_omm(pdbin, pdbref=None, kr=1.0, maxcyc=200):
         pdbref, _ = match_align(pdbref, pdbin)
     tin = _trajify(pdbin, standard_names=False)
     tref = _trajify(pdbref, standard_names=False)
-    
+
     # Turn any CYX to CYS, so restraints not impeded:
     for r in tin.topology.residues:
         if 'CYX' in r.name:

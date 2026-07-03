@@ -5,7 +5,8 @@ from alphafix.tools import alpha_check, alpha_fix
 
 def alpha_check_cli():
     parser = ArgumentParser(
-        description="Check a PDB file for completeness relative to its AlphaFold Database prediction.")
+        description="Check a PDB file for completeness relative to its "
+        "AlphaFold Database prediction.")
     parser.add_argument("-i", "--inpdb",
                         help="Input PDB file.", required=True)
     parser.add_argument("-u", "--uniprot_ids", nargs='*', required=False,
@@ -31,7 +32,8 @@ def alpha_check_cli():
 
 def alpha_fix_cli():
     parser = ArgumentParser(
-        description="Fix missing atoms and residues in a PDB file using data from Alphafold.")
+        description="Fix missing atoms and residues in a PDB file "
+        "using data from Alphafold.")
     parser.add_argument("-i", "--inpdb",
                         help="Input PDB file.", required=True)
     parser.add_argument("-o", "--outpdb",
